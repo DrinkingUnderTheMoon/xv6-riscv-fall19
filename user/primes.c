@@ -35,6 +35,7 @@ void function(int grandparent_fd){
         exit();
     }   
 }
+// 下面这个是内存溢出
 // void function(int grandparent_fd){  // 父读通道
 //     int parent_fd[2];  // 父写子读通道
 //     int pid;
