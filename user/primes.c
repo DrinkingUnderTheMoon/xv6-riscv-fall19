@@ -2,76 +2,95 @@
 #include "kernel/stat.h"
 #include "user/user.h"
 #define N 35
-void init_data(char*data) {
-    for(int i=1;i<=N-1;i++) {
-        data[i] = i+1;
-    }
-    data[0]=N-1;  // 剩余个数为34
-}
-void debug(char type,char left_num,char*data){
-    if(type == 1) {
-        printf("\n父进程：");
-    }
-    else {
-        printf("\n子进程：");
-    }
-    for(int i=0;i<left_num;i++) {
-        printf("%d ",data[i]);
-    }
-    printf("\n");
-}
-
-int main(){
-    int parent_fd[2];
-    int child_fd[2];
-    char parent_buf[N];  // 父进程数据缓冲，其中 parent_buf[0] 为剩余需要判断的数字个数
-    char child_buf[N];  // 子进程数据缓冲，其中 child_buf[0] 为剩余需要判断的数字个数
-    init_data(parent_buf);
+void function(int grandparent_fd){
+    int parent_fd[2];  // 父写子读通道
     int pid;
-    while(1) {
-        pipe(parent_fd);
-        pipe(child_fd);
-        pid = fork();
-        if(pid != 0) { // 父进程
-            debug(1,parent_buf[0]+1,parent_buf);
-            write(parent_fd[1],parent_buf,parent_buf[0]+1);
-            close(parent_fd[1]);
-            wait();
-            read(child_fd[0],parent_buf,1);//读子进程的child_buf[0]，即子进程处理后的剩余数字个数，并保存到parent_buf[0]
-            printf("父进程：parent_buf[0]:%d",parent_buf[0]);
-            if(parent_buf[0]==0){
-                close(child_fd[0]);
-                break;
+    char smallest_data;
+    pipe(parent_fd);
+    if(read(grandparent_fd,&smallest_data,sizeof(smallest_data))<=0){ // 从父读通道读
+        close(grandparent_fd);  // 若写端关闭，则关闭读端
+        close(parent_fd[1]);
+        exit();
+    }
+    printf("primes:%d\n",smallest_data); 
+    if((pid = fork()) != 0){ // 当前父进程
+        close(parent_fd[0]);
+        char data;
+        while(1){
+            if(read(grandparent_fd,&data,sizeof(data)) <= 0){ // 从父读通道读
+                close(grandparent_fd);  // 若爷爷写通道关闭
+                close(parent_fd[1]);  // 则关闭父写通道
+                while (wait()!=-1);
+                exit();
             }
-            while(read(child_fd[0],parent_buf+1,parent_buf[0])!=parent_buf[0]){
-                // printf("stay");  最后会在这里死循环
+            if(data % smallest_data == 0) {
+                continue;
             }
-            close(child_fd[0]);
-        
-        }
-        else {  // 子进程
-            while(read(parent_fd[0],child_buf,1)!=1);
-            while(read(parent_fd[0],child_buf+1,child_buf[0])!=child_buf[0]);
-            debug(0,child_buf[0]+1,child_buf);
-            char smallest_num = child_buf[1];
-            printf("prime %d",smallest_num);
-            int left_num = child_buf[0];
-            int j = 0;
-            for(int i=1;i<=left_num;i++) {
-                if(child_buf[i]%smallest_num == 0) {
-                    child_buf[0]--;
-                }
-                else {
-                    ++j;
-                    child_buf[j] = child_buf[i];
-                    // printf("j:%d,child_buf[j]:%d",j,child_buf[j]);
-                }
-            }
-            write(child_fd[1],child_buf,child_buf[0]+1);
-            debug(0,child_buf[0]+1,child_buf);
-            close(child_fd[1]);
-            exit();
+            write(parent_fd[1],&data,sizeof(data));  // 写入父写通道
         }
     }
-    return 0;
+    else {  // 子进程
+        close(parent_fd[1]);
+        function(parent_fd[0]);
+        exit();
+    }   
 }
+// void function(int grandparent_fd){  // 父读通道
+//     int parent_fd[2];  // 父写子读通道
+//     int pid;
+//     pipe(parent_fd);        
+//     if((pid = fork()) != 0){ // 当前父进程
+//         close(parent_fd[0]);
+//         char smallest_data, data;
+//         if(read(grandparent_fd,&smallest_data,sizeof(smallest_data))<=0){ // 从父读通道读
+//             close(grandparent_fd);  // 若写端关闭，则关闭读端
+//             close(parent_fd[1]);
+//             exit();
+//         }
+//         printf("primes:%d\n",smallest_data); 
+//         while(1){
+//             if(read(grandparent_fd,&data,sizeof(data)) <= 0){ // 从父读通道读
+//                 close(grandparent_fd);  // 若爷爷写通道关闭
+//                 close(parent_fd[1]);  // 则关闭父写通道
+//                 while (wait()!=-1);
+//                 exit();
+//             }
+//             if(data % smallest_data == 0) {
+//                 continue;
+//             }
+//             write(parent_fd[1],&data,sizeof(data));  // 写入父写通道
+//         }
+//     }
+//     else {  // 子进程
+//         close(parent_fd[1]);
+//         function(parent_fd[0]);
+//         exit();
+//     }    
+// }
+int main(){
+    
+    int parent_fd[2];
+    int pid;
+    pipe(parent_fd);
+    if((pid = fork())!=0) {  // 父进程
+        close(parent_fd[0]);
+        for(char i=2;i<=N;i++){
+            write(parent_fd[1],&i,sizeof(i));
+        }
+        close(parent_fd[1]);
+        while (wait()!=-1);
+        exit();
+    }
+    else{  // 子进程
+        close(parent_fd[1]);
+        function(parent_fd[0]);
+        exit();
+    }
+}
+// 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 -> drop 4,6,~~,34 ->
+// 3 5 7 9 11 13 15 17 19 21 23 25 27 29 31 33 35 -> drop 9 15 21 27 33 ->
+// 5 7 11 13 17 19 23 25 29 31 35 -> drop 25 35 ->
+// 7 11 13 17 19 23 29 31 -> drop nothing ->
+// 11 13 17 19 23 29 31 -> drop nothing ->
+// 13 17 19 23 29 31 -> drop nothing ->
+
