@@ -15,7 +15,7 @@ int main(int argc, char*argv[]){
         }
         close(parent_fd[0]);
         if(strcmp(buf,"ping")==0) {
-            printf("id:%d received %s\n",getpid(),buf);
+            printf("id:%d received %s\n",getpid(),buf);  // 获取子进程pid
         }
         else {
             printf("error!");
@@ -31,7 +31,7 @@ int main(int argc, char*argv[]){
         while(read(child_fd[0],buf,4) != 4){ // 父进程等子进程传输回来
         }
         if(strcmp(buf,"pong")==0) {
-            printf("id:%d received %s\n",getpid(),buf);
+            printf("id:%d received %s\n",getpid(),buf);  // 获取父进程pid
         }
         else {
             printf("error!");
