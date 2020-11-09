@@ -80,7 +80,7 @@ int main(int argc, char *argv[]){  // find path name
         find(".",argv[1]);
     }
     if(argc == 3){
-        printf("get it\n");
+        // printf("get it\n");
         find(argv[1],argv[2]);
     }
     exit();
