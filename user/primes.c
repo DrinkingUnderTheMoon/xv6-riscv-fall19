@@ -12,7 +12,7 @@ void function(int grandparent_fd){
         close(parent_fd[1]);
         exit();
     }
-    printf("primes:%d\n",smallest_data); 
+    printf("prime %d\n",smallest_data); 
     if((pid = fork()) != 0){ // 当前父进程
         close(parent_fd[0]);
         char data;
