@@ -23,7 +23,7 @@
 #include "fs.h"
 #include "buf.h"
 #define NBUCKET 8
-#define MOD NBUCKET
+#define MOD 7
 char bcache_name[13][9] = {"bcache0","bcache1","bcache2","bcache3","bcache4","bcache5","bcache6","bcache7","bcache8","bcache9","bcache10","bcache11","bcache12"};
 struct {
   struct spinlock lock[NBUCKET];
@@ -35,13 +35,13 @@ struct {
 } bcache;
 
 int find_the_slot(uint dev,uint blockno){
-  return ((dev<<1)^(blockno>>4)^blockno)&(0X7);
+  return ((dev<<1)^(blockno>>4)^blockno)&MOD;
 }
 
 void binit(void){
 // 初始化一个双向的链表结构大概是:
 // [head0] -(next)> [28/21/14/7] -(next)> ... -(next)> [0] -(next)> [head]
-// [headi] <(prev)- [n*MOD+i] <(prev)- ... <(prev)- [i] <(prev)- [head]
+// [headi] <(prev)- [n*NBUCKET+i] <(prev)- ... <(prev)- [i] <(prev)- [head]
 // 无竞争
   struct buf *b;
   for(int i=0;i<NBUCKET;i++){
@@ -51,11 +51,10 @@ void binit(void){
     bcache.head[i].prev = &bcache.head[i];
     bcache.head[i].next = &bcache.head[i];
   }
-  printf("\n");
   uint l;
   struct buf* head_pointer = 0;
   for(b = bcache.buf,l = 0; b < bcache.buf+NBUF; b++,l++){
-    head_pointer = &bcache.head[l&7];
+    head_pointer = &bcache.head[l&MOD];
     b->next = head_pointer->next;
     b->prev = head_pointer;
     initsleeplock(&b->lock, "buffer");
@@ -137,13 +136,13 @@ void brelse(struct buf *b){
     panic("brelse");
 
   releasesleep(&b->lock);
-  int slot = (b-bcache.buf)&0x7;
+  int slot = (b-bcache.buf)&MOD;
   acquire(&bcache.lock[slot]);
   b->refcnt--;
   if (b->refcnt == 0) {
     // no one is waiting for it.
     // 将这个复原的缓冲块放到链表头
-    struct buf* head = &bcache.head[(b-bcache.buf)&0x7];
+    struct buf* head = &bcache.head[(b-bcache.buf)&MOD];
     b->next->prev = b->prev;
     b->prev->next = b->next;
     b->next = head->next;
@@ -156,14 +155,14 @@ void brelse(struct buf *b){
 }
 
 void bpin(struct buf *b){
-  int slot = (b - bcache.buf)&0x7;
+  int slot = (b - bcache.buf)&MOD;
   acquire(&bcache.lock[slot]);
   b->refcnt++;
   release(&bcache.lock[slot]);
 }
 
 void bunpin(struct buf *b){
-  int slot = (b - bcache.buf)&0x7;
+  int slot = (b - bcache.buf)&MOD;
   acquire(&bcache.lock[slot]);
   b->refcnt--;
   release(&bcache.lock[slot]);
