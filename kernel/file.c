@@ -16,7 +16,6 @@
 struct devsw devsw[NDEV];
 struct {
   struct spinlock lock;
-  struct file file[NFILE];
 } ftable;
 
 void
@@ -30,17 +29,15 @@ struct file*
 filealloc(void)
 {
   struct file *f;
-
-  acquire(&ftable.lock);
-  for(f = ftable.file; f < ftable.file + NFILE; f++){
-    if(f->ref == 0){
-      f->ref = 1;
-      release(&ftable.lock);
-      return f;
-    }
+  f = (struct file*)bd_malloc(sizeof(struct file));
+  if(f){
+    memset(f,0,sizeof(struct file));
+    f->ref = 1;
   }
-  release(&ftable.lock);
-  return 0;
+  else{
+    printf("allo fail\n");
+  }
+  return f;
 }
 
 // Increment ref count for file f.
@@ -69,10 +66,9 @@ fileclose(struct file *f)
     return;
   }
   ff = *f;
-  f->ref = 0;
-  f->type = FD_NONE;
+  bd_free(f);
   release(&ftable.lock);
-
+  
   if(ff.type == FD_PIPE){
     pipeclose(ff.pipe, ff.writable);
   } else if(ff.type == FD_INODE || ff.type == FD_DEVICE){
@@ -114,6 +110,8 @@ fileread(struct file *f, uint64 addr, int n)
   if(f->type == FD_PIPE){
     r = piperead(f->pipe, addr, n);
   } else if(f->type == FD_DEVICE){
+    if(f->major < 0 || f->major >= NDEV || !devsw[f->major].read)
+      return -1;
     r = devsw[f->major].read(1, addr, n);
   } else if(f->type == FD_INODE){
     ilock(f->ip);
@@ -140,6 +138,8 @@ filewrite(struct file *f, uint64 addr, int n)
   if(f->type == FD_PIPE){
     ret = pipewrite(f->pipe, addr, n);
   } else if(f->type == FD_DEVICE){
+    if(f->major < 0 || f->major >= NDEV || !devsw[f->major].write)
+      return -1;
     ret = devsw[f->major].write(1, addr, n);
   } else if(f->type == FD_INODE){
     // write a few blocks at a time to avoid exceeding

@@ -56,9 +56,13 @@ void bit_clear(char *array, int index) {
   array[index/8] = (b & ~m);
 }
 
+void bit_xor(char *array, int index) {
+  char b = array[index/8];
+  char m = (1 << (index % 8));
+  array[index/8] = (b ^ m);
+}
 // Print a bit vector as a list of ranges of 1 bits
-void
-bd_print_vector(char *vector, int len) {
+void bd_print_vector(char *vector, int len) {
   int last, lb;
   
   last = 1;
@@ -78,8 +82,7 @@ bd_print_vector(char *vector, int len) {
 }
 
 // Print buddy's data structures
-void
-bd_print() {
+void bd_print() {
   for (int k = 0; k < nsizes; k++) {
     printf("size %d (blksz %d nblk %d): free list: ", k, BLK_SIZE(k), NBLK(k));
     lst_print(&bd_sizes[k].free);
@@ -93,8 +96,7 @@ bd_print() {
 }
 
 // What is the first k such that 2^k >= n?
-int
-firstk(uint64 n) {
+int firstk(uint64 n) {
   int k = 0;
   uint64 size = LEAF_SIZE;
 
@@ -106,8 +108,7 @@ firstk(uint64 n) {
 }
 
 // Compute the block index for address p at size k
-int
-blk_index(int k, char *p) {
+int blk_index(int k, char *p) {
   int n = p - (char *) bd_base;
   return n / BLK_SIZE(k);
 }
@@ -119,8 +120,7 @@ void *addr(int k, int bi) {
 }
 
 // allocate nbytes, but malloc won't return anything smaller than LEAF_SIZE
-void *
-bd_malloc(uint64 nbytes)
+void * bd_malloc(uint64 nbytes)
 {
   int fk, k;
 
@@ -139,23 +139,23 @@ bd_malloc(uint64 nbytes)
 
   // Found a block; pop it and potentially split it.
   char *p = lst_pop(&bd_sizes[k].free);
-  bit_set(bd_sizes[k].alloc, blk_index(k, p));
-  for(; k > fk; k--) {
+  bit_xor(bd_sizes[k].alloc, blk_index(k, p)>>1);  // 只需要处理alloc，当它出现在了链表上时，已经说明它被分裂了（因为meta和无效区的存在）
+  for(; k > fk; k--) {  // 处理分裂标签，在高于fk的层都将把右儿子放到链表上，并维护alloc和split
     // split a block at size k and mark one half allocated at size k-1
     // and put the buddy on the free list at size k-1
-    char *q = p + BLK_SIZE(k-1);   // p's buddy
+    char *q = p + BLK_SIZE(k-1);   // p's buddy 的地址
     bit_set(bd_sizes[k].split, blk_index(k, p));
-    bit_set(bd_sizes[k-1].alloc, blk_index(k-1, p));
-    lst_push(&bd_sizes[k-1].free, q);
+    bit_set(bd_sizes[k-1].alloc, blk_index(k-1, p)>>1);  // 通过地址找到下一层的alloc 的 index
+    lst_push(&bd_sizes[k-1].free, q);  // 将右儿子地址放到空闲链表中
   }
+  // fk层 不需要 split
   release(&lock);
 
   return p;
 }
 
 // Find the size of the block that p points to.
-int
-size(char *p) {
+int size(char *p) {
   for (int k = 0; k < nsizes; k++) {
     if(bit_isset(bd_sizes[k+1].split, blk_index(k+1, p))) {
       return k;
@@ -166,23 +166,22 @@ size(char *p) {
 
 // Free memory pointed to by p, which was earlier allocated using
 // bd_malloc.
-void
-bd_free(void *p) {
+void bd_free(void *p) {
   void *q;
   int k;
-
   acquire(&lock);
+  // 这个p一定是被使用的，它的上层一定被分裂，而它这一层没被分裂，利用这个特性找到它的层->size()函数
   for (k = size(p); k < MAXSIZE; k++) {
     int bi = blk_index(k, p);
-    int buddy = (bi % 2 == 0) ? bi+1 : bi-1;
-    bit_clear(bd_sizes[k].alloc, bi);  // free p at size k
-    if (bit_isset(bd_sizes[k].alloc, buddy)) {  // is buddy allocated?
+    int buddy = ((bi & 1) == 0) ? bi+1 : bi-1;
+    bit_xor(bd_sizes[k].alloc, bi>>1);  // 出现bd_malloc/_free只需要翻转
+    if (bit_isset(bd_sizes[k].alloc, buddy>>1)) {  // is buddy allocated? 如果为1说明现在buddy正被使用，不可继续合并
       break;   // break out of loop
     }
     // budy is free; merge with buddy
-    q = addr(k, buddy);
-    lst_remove(q);    // remove buddy from free list
-    if(buddy % 2 == 0) {
+    q = addr(k, buddy);  // 通过buddy编号以及第k层块的大小来计算出buddy的地址
+    lst_remove(q);    // remove buddy from free list 节点->X->节点
+    if(buddy % 2 == 0) {  // [0 1] [2 3] [4 5] 维护p为偶数块地址 左儿子
       p = q;
     }
     // at size k+1, mark that the merged buddy pair isn't split
@@ -194,16 +193,14 @@ bd_free(void *p) {
 }
 
 // Compute the first block at size k that doesn't contain p
-int
-blk_index_next(int k, char *p) {
+int blk_index_next(int k, char *p) {
   int n = (p - (char *) bd_base) / BLK_SIZE(k);
   if((p - (char*) bd_base) % BLK_SIZE(k) != 0)
       n++;
   return n ;
 }
 
-int
-log2(uint64 n) {
+int log2(uint64 n) {
   int k = 0;
   while (n > 1) {
     k++;
@@ -213,8 +210,7 @@ log2(uint64 n) {
 }
 
 // Mark memory from [start, stop), starting at size 0, as allocated. 
-void
-bd_mark(void *start, void *stop)
+void bd_mark(void *start, void *stop)
 {
   int bi, bj;
 
@@ -222,28 +218,40 @@ bd_mark(void *start, void *stop)
     panic("bd_mark");
 
   for (int k = 0; k < nsizes; k++) {
-    bi = blk_index(k, start);
-    bj = blk_index_next(k, stop);
+    bi = blk_index(k, start);  
+    bj = blk_index_next(k, stop);  // 小数向上取整，整数不动
+    // 不能这里进行插入,奇怪的错误
+    if((bi & 1) == 1){  // [0 1] [2 3] [偶 奇] 如果左闭边界是奇数，则说明[No Used,bi] [bi+1,...]
+      bit_xor(bd_sizes[k].alloc,bi>>1);
+      // lst_push(&bd_sizes[k].free, addr(k, bi-1));   // put buddy on free list
+      // printf("k:%d, bi-1:%d, addr:%p\n",k,bi-1,addr(k, bi-1));  // put buddy on free list)
+    }
+    if((bj & 1) == 1){  // [0 1] [2 3] [偶 奇] 如果右开边界是奇数，则说明[...,][Used,bj) bj就是No Used
+      bit_xor(bd_sizes[k].alloc,bj>>1);
+      // if(bi+1!=bj){  // 跳过最高层
+      //   lst_push(&bd_sizes[k].free, addr(k, bj));   // put buddy on free list
+      // }
+      // printf("k:%d, bj:%d, addr:%p\n",k,bj,addr(k, bj));  // put buddy on free list)
+    }
     for(; bi < bj; bi++) {
       if(k > 0) {
         // if a block is allocated at size k, mark it as split too.
         bit_set(bd_sizes[k].split, bi);
       }
-      bit_set(bd_sizes[k].alloc, bi);
     }
   }
 }
 
 // If a block is marked as allocated and the buddy is free, put the
 // buddy on the free list at size k.
-int
-bd_initfree_pair(int k, int bi) {
+int bd_initfree_pair(int k, int bi, void *bd_left, void *bd_right) {  // [bd_left,bd_right]为可用区间
   int buddy = (bi % 2 == 0) ? bi+1 : bi-1;
   int free = 0;
-  if(bit_isset(bd_sizes[k].alloc, bi) !=  bit_isset(bd_sizes[k].alloc, buddy)) {
+  if(bit_isset(bd_sizes[k].alloc, bi>>1)) {
     // one of the pair is free
     free = BLK_SIZE(k);
-    if(bit_isset(bd_sizes[k].alloc, bi))
+    void* buddy_address = addr(k,buddy);
+    if(buddy_address>=bd_left && buddy_address<bd_right)
       lst_push(&bd_sizes[k].free, addr(k, buddy));   // put buddy on free list
     else
       lst_push(&bd_sizes[k].free, addr(k, bi));      // put bi on free list
@@ -254,24 +262,22 @@ bd_initfree_pair(int k, int bi) {
 // Initialize the free lists for each size k.  For each size k, there
 // are only two pairs that may have a buddy that should be on free list:
 // bd_left and bd_right.
-int
-bd_initfree(void *bd_left, void *bd_right) {
+int bd_initfree(void *bd_left, void *bd_right) {
   int free = 0;
 
   for (int k = 0; k < MAXSIZE; k++) {   // skip max size
     int left = blk_index_next(k, bd_left);
     int right = blk_index(k, bd_right);
-    free += bd_initfree_pair(k, left);
+    free += bd_initfree_pair(k, left, bd_left, bd_right);
     if(right <= left)
       continue;
-    free += bd_initfree_pair(k, right);
+    free += bd_initfree_pair(k, right, bd_left, bd_right);
   }
   return free;
 }
 
 // Mark the range [bd_base,p) as allocated
-int
-bd_mark_data_structures(char *p) {
+int bd_mark_data_structures(char *p) {
   int meta = p - (char*)bd_base;
   printf("bd: %d meta bytes for managing %d bytes of memory\n", meta, BLK_SIZE(MAXSIZE));
   bd_mark(bd_base, p);
@@ -279,9 +285,9 @@ bd_mark_data_structures(char *p) {
 }
 
 // Mark the range [end, HEAPSIZE) as allocated
-int
-bd_mark_unavailable(void *end, void *left) {
-  int unavailable = BLK_SIZE(MAXSIZE)-(end-bd_base);
+int bd_mark_unavailable(void *end, void *left) {
+  int unavailable = BLK_SIZE
+  (MAXSIZE)-(end-bd_base);
   if(unavailable > 0)
     unavailable = ROUNDUP(unavailable, LEAF_SIZE);
   printf("bd: 0x%x bytes unavailable\n", unavailable);
@@ -292,16 +298,20 @@ bd_mark_unavailable(void *end, void *left) {
 }
 
 // Initialize the buddy allocator: it manages memory from [base, end).
-void
-bd_init(void *base, void *end) {
-  char *p = (char *) ROUNDUP((uint64)base, LEAF_SIZE);
+void bd_init(void *base, void *end) {
+  char *p = (char *) ROUNDUP((uint64)base, LEAF_SIZE);  // 头部对齐16字节
   int sz;
 
   initlock(&lock, "buddy");
-  bd_base = (void *) p;
+  bd_base = (void *) p;  // 使用全局变量记录真实分配区域头部
 
   // compute the number of sizes we need to manage [base, end)
-  nsizes = log2(((char *)end-p)/LEAF_SIZE) + 1;
+  nsizes = log2(((char *)end-p)/LEAF_SIZE) + 1;  
+  // (end-p)/LEAF_SIZE [整数除法向下取整，(47-0)/16->2] -> (end-p)/16计算最小块数,log2取层数
+  // (47-0)/16=2 log2(2)=1 [1,1]-> [1 1] 实际上2层
+  // (31-0)/16=1 log2(1)=0 [1] 实际上也要2层作为管理
+  // MAXSIZE 实际可用最大层 nsizes-1
+  // ((1Long << ((nsizes-1))) * 16)
   if((char*)end-p > BLK_SIZE(MAXSIZE)) {
     nsizes++;  // round up to the next power of 2
   }
@@ -312,13 +322,19 @@ bd_init(void *base, void *end) {
   // allocate bd_sizes array
   bd_sizes = (Sz_info *) p;
   p += sizeof(Sz_info) * nsizes;
-  memset(bd_sizes, 0, sizeof(Sz_info) * nsizes);
+  memset(bd_sizes, 0, sizeof(Sz_info) * nsizes);  // 该数据区作为存放Sz_info区域
 
   // initialize free list and allocate the alloc array for each size k
   for (int k = 0; k < nsizes; k++) {
     lst_init(&bd_sizes[k].free);
-    sz = sizeof(char)* ROUNDUP(NBLK(k), 8)/8;
-    bd_sizes[k].alloc = p;
+    sz = sizeof(char)* ROUNDUP(NBLK(k), 8)>>4;  // (当前层块数/8/2)个字节，层数越高，块数越少
+    // xxxx/8 -> xxxx/16
+    // 这里卡了很久...... sz 现在是 8的倍数，在之前/8是没问题的，而如果在这里/16将会把sz置成0，而sz实际上不足1要补1
+    if(sz == 0) {
+      sz = 1;
+    }
+    bd_sizes[k].alloc = p; 
+    // printf("k:%d, sz:%d, alloc array address:%p\n",k,sz,(char*)p);
     memset(bd_sizes[k].alloc, 0, sz);
     p += sz;
   }
@@ -327,6 +343,7 @@ bd_init(void *base, void *end) {
   // we will not split blocks of size k = 0, the smallest size.
   for (int k = 1; k < nsizes; k++) {
     sz = sizeof(char)* (ROUNDUP(NBLK(k), 8))/8;
+    // printf("k:%d, sz:%d, split array address:%p\n",k,sz,(char*)p);
     bd_sizes[k].split = p;
     memset(bd_sizes[k].split, 0, sz);
     p += sz;
@@ -344,11 +361,10 @@ bd_init(void *base, void *end) {
   
   // initialize free lists for each size k
   int free = bd_initfree(p, bd_end);
-
   // check if the amount that is free is what we expect
+  // bd_print();
   if(free != BLK_SIZE(MAXSIZE)-meta-unavailable) {
     printf("free %d %d\n", free, BLK_SIZE(MAXSIZE)-meta-unavailable);
     panic("bd_init: free mem");
   }
 }
-
